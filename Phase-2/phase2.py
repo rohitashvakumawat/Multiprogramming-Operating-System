@@ -1,352 +1,423 @@
 import random
 
-M = [['\0' for _ in range(4)] for _ in range(300)]  # memory
-IR = ['\0' for _ in range(4)]  # instruction register
-IC = 0  # instruction counter
-R = ['\0' for _ in range(4)]  # general purpose register
-C = False  # toggle register
-PTR = 0  # page table register
-buffer = [' ' for _ in range(40)]  #
-EM = 0  # error message
-SI = 0  # system interrupt
-TI = 0  # time interrupt
-PI = 0  # page interrupt
-RA = 0
-VA = 0  # real and virtual address
-all_pages = [0] * 30
-file1 = None
-file2 = None
-count = 0
-PTE = 0  # page table entry
-pgnum = 0  # page number
-error_occurred = False
-valid = 0
-term = 0
-dataerr = 0
+m = 0
+IR = [0 for i in range(4)]
+IC = [0 for i in range(2)]
+R = [0 for i in range(4)]
+C = False
+SI = 0
+PI = 0
+TI = 0
+PTR = [0 for i in range(4)]
 
-class ProcessControlBlock:
-    def __init__(self):
-        self.jobid = 0
-        self.ttl = 0  # time limit
-        self.ttc = 0  # time counter incremented only after execution of instruction
-        self.tll = 0  # line limit
-        self.llc = 0  # line limit counter
+used_frames = set()
 
-pcb = ProcessControlBlock()
+memory = [['\0' for i in range(4)] for j in range(300)]
+opfile = open('output.txt', 'w')
+input_buffer = []  # size is 40 bytes
+data_index = 0
 
-def read():
-    global buffer
-    buffer = [' ' for _ in range(40)]
-    buffer = file1.readline().strip()
-    if buffer.startswith('$END'):
-        terminate(1)
-        return
+pd_error = 0   # for line limit exceeded
+gd_error = 0   # for out of data
 
-    print(buffer[0:4])
-    i = RA
-    stop = i + 9
-    k = 0
-    for _ in range(i, stop + 1):
+class PCB:
+    def __init__(self, job_id, ttl, tll, ttc, llc):
+        self.job_id = job_id
+        self.TTL = ttl   # total time limit
+        self.TTC = ttc   # total time counter
+        self.TLL = tll   # total line limit
+        self.LLC = llc   # line limit counter
+
+    def incrementLLC(self):
+        self.LLC = self.LLC + 1
+
+    def incrementTTC(self):
+        self.TTC = self.TTC + 1
+
+def print_memory():
+    for i in range(300):
         for j in range(4):
-            M[i][j] = buffer[k]
-            k += 1
-            print(f'M[{i}][{j}]={M[i][j]}')
-    print()
+            print(memory[i][j], end=" ", file=opfile)
+        print("\n", file=opfile)
 
-def write():
-    global pcb
-    pcb.llc += 1
-    if pcb.llc > pcb.tll:
-        terminate(2)
+def get_data(address):
+    global data_index, gd_error
+    i, j = 0, 0
+    line = input_buffer[data_index]
+    if (line[0] == "$"):  # checking for out of data error
+        gd_error = -1
         return
+    address = (address // 10) * 10
+    while (line[i] != '\n'):          # adding data to the memory at received address
+        memory[address][j] = line[i]
+        i += 1
+        j += 1
+        if (j == 4):
+            j = 0
+            address += 1
+    data_index += 1
 
-    i = RA
-    stop = i + 9
-    for i in range(RA, stop + 1):
+def put_data(address):
+    global pd_error
+    if (pcb.LLC >= pcb.TLL):  # checking for line limit exceeded
+        pd_error = -1
+        return
+    address = (address // 10) * 10
+
+    for i in range(address, address + 10):   # printing entire block to file
         for j in range(4):
-            if M[i][j] == '\0':
-                continue
-            else:
-                file2.write(M[i][j])
-    file2.write("\n")
+            if (memory[i][j] == '\0'):
+                break
+            print(memory[i][j], end="", file=opfile)
+    print('\n', file=opfile)
+    pcb.incrementLLC()
 
-def terminate(EM):
-    global term
-    file2.write("\n\n")
-    file2.write(f"Job Id : {pcb.jobid}\n")
-    if EM == 0:
-        file2.write("Program executed successfully\n")
-        file2.write("No Error\n")
-    elif EM == 1:
-        file2.write("Error Occurred\n")
-        file2.write("Out of Data\n")
-    elif EM == 2:
-        file2.write("Error Occurred\n")
-        file2.write("Line Limit Exceeded\n")
-    elif EM == 3:
-        file2.write("Error Occurred\n")
-        file2.write("Time Limit Exceeded\n")
-    elif EM == 4:
-        file2.write("Error Occurred\n")
-        file2.write("Operation Code Error\n")
-    elif EM == 5:
-        file2.write("Error Occurred\n")
-        file2.write("Operand Error\n")
-    elif EM == 6:
-        file2.write("Error Occurred\n")
-        file2.write("Invalid Page Fault\n")
+def terminate(em):
+    if (em == 0):
+        print("Program Executed Sucessfully\n", file=opfile)
+    elif (em == 1):
+        print("Out of Data Error\n", file=opfile)
+    elif (em == 2):
+        print("Line Limit Exceeded \n ", file=opfile)
+    elif (em == 3):
+        print("Time Limit Exceeded\n", file=opfile)
+    elif (em == 4):
+        print("Operation Code Error\n", file=opfile)
+    elif (em == 5):
+        print("Operand Error\n", file=opfile)
+    elif (em == 6):
+        print("Invalid Page Fault\n", file=opfile)
 
-    file2.write(f"IC : {IC}\n")
-    file2.write("IR :")
-    file2.write(''.join(IR))
-    file2.write("\n")
-    file2.write(f"SI : {SI}\n")
-    file2.write(f"PI : {PI}\n")
-    file2.write(f"TI : {TI}\n")
-    file2.write(f"TLL : {pcb.tll}\n")
-    file2.write(f"TTC : {pcb.ttc}\n")
-    file2.write(f"LLC : {pcb.llc}\n")
-    file2.write(f"TTL : {pcb.ttl}\n")
-    file2.write("\n\n")
-    term = 1
-
-def mos(PI):
-    global pgnum, count, valid
-    count = 0
-    if PI == 3 and TI == 0:
-        if valid == 1:
-            print("Valid Page Fault: ")
-            pgnum = allocate()
-            print(f"\nAllocated Page for Logical Page {PTE % 10}: {pgnum}")
-            M[PTE][0] = chr(pgnum // 10 + 48)
-            M[PTE][1] = chr(pgnum % 10 + 48)
-            print("Page Table")
-            for x in range(10):
-                print(f"M[{PTR + x}]={M[PTR + x][0]}{M[PTR + x][1]}")
-            count += 1
-            PI = 0
-            print(f"IC: {IC}")
-    elif PI == 2 and TI == 0:  
-        terminate(5)
-    elif SI == 1 and TI == 0:  
-        read()
-    elif SI == 2 and TI == 0:  
-        write()
-    elif SI == 3 and TI == 0:  
-        terminate(0)
-    elif PI == 1 and TI == 0:  
-        terminate(4)
-    elif SI == 1 and TI == 2:  
-        terminate(3)
-    elif SI == 2 and TI == 2:
-        write()
-        terminate(3)
-    elif SI == 3 and TI == 2:
-        terminate(0)
-    elif PI == 1 and TI == 2:
-        terminate(3)
-        terminate(4)  
-    elif PI == 2 and TI == 2:
-        terminate(3)
-        terminate(5)  
-
-def read_file():
-    global file1, file2, pcb
-    file1 = open("E:\VIT\SY2\OS\Phase 2\input.txt", "r")
-    file2 = open("E:\VIT\SY2\OS\Phase 2\output.txt", "w")
-    load()
-    file1.close()
-    file2.close()
-
-def allocate():  
-    while True:
-        pagenum = random.randint(0, 29)
-        if all_pages[pagenum] == 0:
-            all_pages[pagenum] = 1
-            return pagenum
+    print("---Interrupt Status---", file=opfile)
+    print("SI", SI, file=opfile)
+    print("PI", PI, file=opfile)
+    print("TI", TI, file=opfile)
+    print("---Register Status---", file=opfile)
+    print("R", R, file=opfile)
+    print("IC", IC, file=opfile)
+    print("IR", IR, file=opfile)
+    print("C", C, file=opfile)
+    print("PTR", PTR, file=opfile)
+    print(
+        "----------------------------------------------------------------------------",
+        file=opfile)
+    print("\n", file=opfile)
 
 def load():
-    global pcb, dataerr
-    m = 0
-    count = 0
-    while True:
-        buffer = file1.readline().strip()
-        if buffer.startswith('$AMJ'):
-            init()
-            pcb.jobid = int(buffer[4:8])
-            pcb.ttl = int(buffer[8:12])
-            pcb.tll = int(buffer[12:16])
-            PTR = allocate() * 10
-            print(f"\nAllocated Page is for Page Table: {PTR // 10}")
-            print("Job ID :", pcb.jobid)
-            print("Time Limit :", pcb.ttl)
-            print("Line Limit :", pcb.tll)
-            print("Time Counter :", pcb.ttc)
-            print("Line Counter :", pcb.llc)
-            continue
-        elif buffer.startswith('$DTA'):
-            print("Started Execution")
-            start_execution()
-            if dataerr == 1:
-                m = 0
-                count = 0
-                dataerr = 0
-            continue
-        elif buffer.startswith('$END'):
-            m = 0
-            count = 0
-            continue
-        else:
-            PTE = allocate()
-            print(f"\nAllocated Page for Page {count}: {PTE}")
-            M[PTR + count][0] = chr(PTE // 10 + 48)
-            M[PTR + count][1] = chr(PTE % 10 + 48)
-            count += 1
-            k = 0
-            m = PTE * 10
-            stop = m + 10
-            for _ in range(m, stop):
-                for j in range(4):
-                    if k < len(buffer):
-                        M[m][j] = buffer[k]
-                        k += 1
-        for x in range(300):
-            print(f"M[{x}]: {''.join(M[x])}")
+    with open("E:\VIT\SY2\OS\Phase 2\input.txt", "r") as file:
+        global input_buffer, memory
 
-def simulation():
-    global pcb
-    if IR[0] == 'G' and IR[1] == 'D':
-        pcb.ttc += 2
-    elif IR[0] == 'P' and IR[1] == 'D':
-        pcb.ttc += 1
-    elif IR[0] == 'H':
-        pcb.ttc += 1
-    elif IR[0] == 'L' and IR[1] == 'R':
-        pcb.ttc += 1
-    elif IR[0] == 'S' and IR[1] == 'R':
-        pcb.ttc += 2
-    elif IR[0] == 'C' and IR[1] == 'R':
-        pcb.ttc += 1
-    elif IR[0] == 'B' and IR[1] == 'T':
-        pcb.ttc += 1
+        input_buffer = file.readlines()
+        counter = -1
+        index = 0
+        while (index < len(input_buffer)):
+            global data_index, pcb, id, time, lines_printed, PTR, used_frames, memory, C, IR, IC, R, SI, PI, TI, pd_error, gd_error
+            line = input_buffer[index]
+            if (line[0].startswith('$')):
+                if (line[1:4] == 'AMJ'):  # control card
 
-    if pcb.ttc > pcb.ttl:
-        TI = 2
-        mos(PI)
+                    print('Reading Program', file=opfile)
 
-def start_execution():
-    global IC, term, PI
-    IC = 0
-    while True:
-        term = 0
-        RA = address_map(IC)
-        if PI != 0:
-            break
-        for i in range(4):  
-            IR[i] = M[RA][i]
-        if M[RA][0] != 'H' and not M[RA][2].isdigit() or not M[RA][3].isdigit():
-            PI = 2
-            mos(PI)
+                    id = line[4:8]
+                    time = line[8:12]
+                    lines_printed = line[12:16]
+                    counter = 0
+                    pcb = PCB(id, int(time), int(lines_printed), 0,
+                              0)  # initialize PCB
+                    # initialise frame for page table
+                    frame_num = (random.randint(0, 29))
+                    used_frames.add(frame_num)   # add frame to used frames set
+                    frame_num *= 10
+                    # initialise page table register
+                    PTR[1] = frame_num // 100
+                    frame_num = frame_num % 100
+                    PTR[2] = frame_num // 10
+                    PTR[3] = frame_num % 10
 
-        IC += 1
+                elif (line[1:4] == 'DTA'):
+                    print('Reading Data\n', file=opfile)
+                    counter = 1
+                    data_index = index + 1  # index of where data address begins
+                    mos_startexecution()
+                    index = data_index - 1
 
-        if IR[0] == 'G' and IR[1] == 'D':  
-            simulation()
-            SI = 1
-            valid = 1
-            if M[RA][2].isdigit():
-                VA = int(M[RA][2:])
-                RA = address_map(VA)
+                elif (line[1:4] == 'END'):
+                    counter = -1
+                    print("new prog")
+                    # resetting all globals
+                    C = False
+                    memory = [['\0' for i in range(4)] for j in range(300)]
 
-            mos(PI)
-        elif IR[0] == 'P' and IR[1] == 'D':  
-            simulation()
-            SI = 2
-            valid = 0
-            if M[RA][2].isdigit():
-                VA = int(M[RA][2:])
-                RA = address_map(VA)
+                    IR = [0 for i in range(4)]
+                    IC = [0 for i in range(2)]
+                    R = [0 for i in range(4)]
+                    C = False
+                    SI = 0  # need to be looked
+                    PI = 0
+                    TI = 0
+                    PTR = [0 for i in range(4)]
+                    used_frames.clear()
+                    counter = -1
+                    pd_error = 0
+                    gd_error = 0
+                else:
+                    print('error in input')
+                    exit(-1)
 
-            mos(PI)
-        elif IR[0] == 'H':
-            simulation()
-            SI = 3
-            valid = 0
-            mos(PI)
-            return
-        elif IR[0] == 'L' and IR[1] == 'R':
-            simulation()
-            valid = 0
-            if M[RA][2].isdigit():
-                VA = int(M[RA][2:])
-                RA = address_map(VA)
-
-            for j in range(4):
-                R[j] = M[RA][j]
-        elif IR[0] == 'S' and IR[1] == 'R':
-            simulation()
-            valid = 1
-            if M[RA][2].isdigit():
-                VA = int(M[RA][2:])
-                RA = address_map(VA)
-
-            for j in range(4):
-                M[RA][j] = R[j]
-        elif IR[0] == 'C' and IR[1] == 'R':
-            simulation()
-            valid = 0
-            if M[RA][2].isdigit():
-                VA = int(M[RA][2:])
-                RA = address_map(VA)
-
-            s1 = ''.join(M[RA])
-            s2 = ''.join(R)
-            if s1 == s2:
-                C = True
             else:
-                C = False
-        elif IR[0] == 'B' and IR[1] == 'T':
-            simulation()
-            valid = 0
-            if M[RA][2].isdigit():
-                VA = int(M[RA][2:])
-                RA = address_map(VA)
-            if C:
-                IC = int(''.join(IR[2:]))
+                if (counter == 0):  # for reading instructions
+                    # initialising frame for program
+                    frame_num_prog = random.randint(0, 29)
+                    while frame_num_prog in used_frames:  # finding unique frame
+                        frame_num_prog = random.randint(0, 29)
+                    used_frames.add(frame_num_prog)
+
+                    pt_num = int(PTR[1]) * 100 + int(PTR[2]) * 10 + int(
+                        PTR[3])  # updating page table entry
+
+                    memory[pt_num][2] = frame_num_prog // 10
+                    memory[pt_num][3] = frame_num_prog % 10
+                    memory[pt_num][0] = 0
+                    memory[pt_num][1] = 0
+
+                    i = 0
+                    # print(int(time))
+
+                    frame_num_p = frame_num_prog * 10  # address where program is stored
+
+                    while (i < len(line)):
+
+                        if (line[i] == 'H'):
+
+                            memory[frame_num_p][0] = line[i]
+                            i += 1  # since H has no operands associated with it
+                            frame_num_p += 1
+                        else:
+                            memory[frame_num_p][0:4] = line[i:i + 4]
+
+                            i += 4
+                            frame_num_p += 1
+                        if (frame_num_p % 10 == 0):  # if frame size exceeded- assign new frame
+                            frame_num_prog = random.randint(0, 29)
+                            while frame_num_prog in used_frames:
+                                frame_num_prog = random.randint(0, 29)
+                            used_frames.add(frame_num_prog)
+                            frame_num_p = frame_num_prog * 10
+                            pt_num += 1  # increment page table index
+                            # update page table entry
+                            memory[pt_num][2] = frame_num_prog // 10
+                            memory[pt_num][3] = frame_num_prog % 10
+                            memory[pt_num][0] = 0
+                            memory[pt_num][1] = 0
+            index += 1
+
+def mos_startexecution():
+    IC[0] = 0
+    IC[1] = 0
+    # print(PTR)
+    execute_userprgm()
+
+def master_mode(valid=False):
+    global SI, TI, PI
+    if (TI == 0):
+        if (SI == 0):
+            if (PI == 1):
+                terminate(4)  # Operation Code Error
+            elif (PI == 2):
+                terminate(5)  # Operand Error
+            elif (PI == 3):  # page fault
+                if (valid):  # valid argument passed to master mode function
+                    valid_page_fault()
+                else:
+                    terminate(6)  # invalid page fault
         else:
-            PI = 1
-            SI = 0
-            mos(PI)
-        if term == 1:
-            return
+            if (SI == 1):  # read function GD
+                get_data(address_map(int(IR[2]) * 10 + int(IR[3])))
+            elif (SI == 2):  # write function PD
+                put_data(address_map(int(IR[2]) * 10 + int(IR[3])))
+            elif (SI == 3):  # terminate successfully
+                terminate(0)
+
+    elif (TI == 2):
+
+        if (SI == 0):
+            if (PI == 1):
+                terminate(3)  # Time Limit Exceeded
+                terminate(4)
+            elif (PI == 2):
+                terminate(3)  # Time Limit Exceeded
+                # terminate(5)
+            elif (PI == 3):
+                terminate(3)  # Time Limit Exceeded
+
+        else:
+            if (SI == 1):
+                terminate(3)
+            elif (SI == 2):
+                put_data(address_map(int(IR[2]) * 10 + int(IR[3])))
+                terminate(3)
+            elif (SI == 3):
+                terminate(0)
 
 def address_map(VA):
-    global pgnum
-    if 0 <= VA < 100:
-        PTE = PTR + (VA // 10)
-        if M[PTE][0] == '\0':
-            PI = 3
-            mos(PI)
-        else:
-            RA = int(''.join(M[PTE]).replace('\x00', ''))
-            if 0 <= RA < 300:
-                return RA
-            else:
+
+    global PTR, memory
+    # first we get page table entry
+    pte = (int(PTR[1]) * 100 + int(PTR[2]) * 10 + int(PTR[3])) + VA // 10
+
+    if memory[pte][0] == '\0':  # checking if anything is present in page table entry
+        return -1  # if not invoke page fault
+
+    # calculate memory frame entry from pte
+    addr = int(memory[pte][2]) * 10 + int(memory[pte][3])
+    RA = addr * 10 + VA % 10  # calculate real address
+    return RA
+
+def valid_page_fault():
+    global used_frames, memory, PTR
+    frame_num_data = random.randint(0, 29)  # initialise a new frame for data
+    while frame_num_data in used_frames:
+        frame_num_data = random.randint(0, 29)
+    used_frames.add(frame_num_data)
+    # find page table index which is empty
+    c_ptr = (int(PTR[1]) * 100 + int(PTR[2]) * 10 + int(PTR[3]))
+    while (memory[c_ptr][0] != '\0'):
+        c_ptr += 1
+    # add page table entry
+    memory[c_ptr][2] = frame_num_data // 10
+    memory[c_ptr][3] = frame_num_data % 10
+    memory[c_ptr][0] = 0
+    memory[c_ptr][1] = 0
+
+    print(memory[c_ptr])
+
+def execute_userprgm():
+    time_counter = 0
+    while (1):
+
+        if (pcb.TTC <= pcb.TTL):   # checking for time limit exceeded error
+
+            global IC, IR, R, C, T, SI, TI, PI, pd_error
+            SI = 0
+            PI = 0
+            TI = 0
+            # converting virtual address to real addresss
+            inst_count = address_map(10 * IC[0] + IC[1])
+            if (inst_count == -1):  # master mode - operand error
                 PI = 2
-                mos(PI)
-    else:
-        PI = 2
-        mos(PI)
-    return pgnum * 10
+                master_mode()
+                break
+            IR = memory[inst_count]
+            print("IR", IR)
+            IC[1] += 1  # incrementing IC
+            if IC[1] == 10:
+                IC[0] += 1
+                IC[1] = 0
+            inst = "" + IR[0] + IR[1]
 
-def init():
-    global M, IR, R, C, pcb, PTR, all_pages
-    M = [['\0' for _ in range(4)] for _ in range(300)]
-    IR = ['\0' for _ in range(4)]
-    R = ['\0' for _ in range(4)]
-    C = False
-    pcb.llc = 0
-    pcb.ttc = 0
-    all_pages = [0] * 30
+            if (inst[0] != "H"):
 
-read_file()
+                if ((IR[2].isnumeric() and IR[3].isnumeric()) == False):  # checking for operand error
+
+                    PI = 2
+                    master_mode()
+
+                    break
+                real_address = address_map(int(IR[2]) * 10 + int(IR[3]))
+
+            if inst == "LR":
+                if (real_address == -1):  # invalid page fault
+                    PI = 3
+                    master_mode()
+                    break
+                R = memory[real_address]
+
+            elif inst == "SR":
+                if (real_address == -1):  # valid page fault
+                    PI = 3
+                    # decrementing IC
+                    if IC[1] != 0:
+                        IC[1] -= 1
+                    else:
+                        IC[1] = 9
+                        IC[0] -= 1
+                    master_mode(valid=True)
+                    time_counter -= 1
+                    # pcb.TTC -= 1
+                    continue
+                else:
+                    memory[real_address] = R
+
+            elif inst == "CR":
+
+                if (real_address == -1):  # invalid page fault
+                    PI = 3
+                    master_mode()
+                    break
+                if (memory[real_address] == R):
+                    C = True
+                else:
+                    C = False
+            elif inst == "BT":
+                if (C):
+                    IC[0] = int(IR[2])
+                    IC[1] = int(IR[3])
+
+            elif inst == "GD":
+                print(inst_count, real_address)
+                if (real_address == -1):  # valid page fault
+                    PI = 3
+                    SI = 0
+                    print('valid page fault')
+                    master_mode(valid=True)
+                    if IC[1] != 0:
+                        IC[1] -= 1
+                    else:
+                        IC[1] = 9
+                        IC[0] -= 1
+                    PI = 0
+                    time_counter -= 1
+                    # pcb.TTC -= 1
+                    continue
+                SI = 1
+
+                master_mode()
+                if (gd_error == -1):  # out of data
+                    terminate(1)
+                    break
+                #get_data(int(IR[2]) * 10 + int(IR[3]))
+            elif inst == "PD":
+                if (real_address == -1):  # invalid page fault
+                    PI = 3
+                    master_mode()
+                    break
+                else:
+                    SI = 2
+                    master_mode()
+                    if (pd_error == -1):  # if line limit exceeds
+                        terminate(2)
+                        break
+
+                #put_data(int(IR[2]) * 10 + int(IR[3]))
+            elif inst == "H\0":
+                SI = 3
+                master_mode()
+                # terminate()
+                break
+
+            else:
+                PI = 1
+                master_mode()
+                break
+            pcb.incrementTTC()
+
+        else:         # time limit exceeded error
+            SI = 1
+            TI = 2
+            master_mode()
+            break
+        time_counter += 1
+
+if __name__ == "__main__":
+    load()
+    opfile.close()
